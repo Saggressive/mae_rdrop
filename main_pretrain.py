@@ -33,9 +33,7 @@ from util.misc import NativeScalerWithGradNormCount as NativeScaler
 import models_mae
 
 from engine_pretrain import train_one_epoch
-import os
-from Imagenet_Dataset import Imagenet_Dataset
-# os.environ['CUDA_VISIBLE_DEVICES']="1"
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser('MAE pre-training', add_help=False)
@@ -116,8 +114,8 @@ def main(args):
 
     # fix the seed for reproducibility
     seed = args.seed + misc.get_rank()
-    # torch.manual_seed(seed)
-    # np.random.seed(seed)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
     cudnn.benchmark = True
 
@@ -127,8 +125,7 @@ def main(args):
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-    # dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-    dataset_train = Imagenet_Dataset(os.path.join(args.data_path, 'train'),args.input_size)
+    dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
     print(dataset_train)
 
     if True:  # args.distributed:

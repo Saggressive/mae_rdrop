@@ -6,6 +6,18 @@ from torchvision import transforms
 import random
 import os
 import numpy as np
+from PIL import ImageFilter
+
+class GaussianBlur(object):
+    """Gaussian blur augmentation in SimCLR https://arxiv.org/abs/2002.05709"""
+
+    def __init__(self, sigma=[.1, 2.]):
+        self.sigma = sigma
+
+    def __call__(self, x):
+        sigma = random.uniform(self.sigma[0], self.sigma[1])
+        x = x.filter(ImageFilter.GaussianBlur(radius=sigma))
+        return x
 class Imagenet_Dataset(Dataset):
     def __init__(self, path, input_size):
         self.image_path = []
@@ -17,7 +29,7 @@ class Imagenet_Dataset(Dataset):
             self.image_path.extend(images_path)
 
         self.transform_train = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=(0.4, 1.0), interpolation=3),  # 3 is bicubic
+            transforms.RandomResizedCrop(224, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
             transforms.RandomHorizontalFlip()])
 
         self.transform_base = transforms.Compose([
@@ -25,8 +37,7 @@ class Imagenet_Dataset(Dataset):
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
         self.transform_aug = transforms.Compose([
-            transforms.RandomApply([
-            transforms.ColorJitter(0.4, 0.4, 0.2, 0.1) ], p=0.9),
+            transforms.ColorJitter(0.4, 0.4, 0.2, 0.1),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 

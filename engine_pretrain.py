@@ -36,22 +36,20 @@ def train_one_epoch(model: torch.nn.Module,
     if log_writer is not None:
         print('log_dir: {}'.format(log_writer.log_dir))
 
-    for data_iter_step, (img0, img1) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for data_iter_step, (samples, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
 
         # we use a per iteration (instead of per epoch) lr scheduler
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
 
-        img0 = img0.to(device, non_blocking=True)
-        img1 = img1.to(device, non_blocking=True)
+        samples = samples.to(device, non_blocking=True)
 
         with torch.cuda.amp.autocast():
-            loss, main_loss , aug_loss , kl_loss = model(img0, img1,mask_ratio=args.mask_ratio)
+            loss, mae_loss, cos_loss = model(samples, mask_ratio=args.mask_ratio)
 
         loss_value = loss.item()
-        main_loss_value=main_loss.item()
-        aug_loss_value=aug_loss.item()
-        kl_loss_value=kl_loss.item()
+        mae_loss_value = mae_loss.item()
+        cos_loss_value = cos_loss.item()
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
@@ -66,26 +64,23 @@ def train_one_epoch(model: torch.nn.Module,
         torch.cuda.synchronize()
 
         metric_logger.update(loss=loss_value)
-        metric_logger.update(main_loss=main_loss_value)
-        metric_logger.update(aug_loss=aug_loss_value)
-        metric_logger.update(kl_loss=kl_loss_value)
+        metric_logger.update(mae_loss=mae_loss_value)
+        metric_logger.update(cos_loss=cos_loss_value)
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
-        main_loss_value_reduce= misc.all_reduce_mean(main_loss_value)
-        aug_loss_value_reduce= misc.all_reduce_mean(aug_loss_value)
-        kl_loss_value_reduce= misc.all_reduce_mean(kl_loss_value)
+        mae_loss_value_reduce = misc.all_reduce_mean(mae_loss_value)
+        cos_loss_value_reduce = misc.all_reduce_mean(cos_loss_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """ We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
             """
             epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
             log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
-            log_writer.add_scalar('main_loss', main_loss_value_reduce, epoch_1000x)
-            log_writer.add_scalar('aug_loss', aug_loss_value_reduce, epoch_1000x)
-            log_writer.add_scalar('kl_loss', kl_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('mae_loss', mae_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('cos_loss', cos_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('lr', lr, epoch_1000x)
 
 
