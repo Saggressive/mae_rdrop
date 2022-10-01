@@ -69,8 +69,8 @@ class MaskedAutoencoderViT(nn.Module):
 
         # self.main_tf = nn.Linear(embed_dim,256)
         # self.aug_tf = nn.Linear(embed_dim,256)
-        self.tf = self._build_mlp(3,768,1024,1024)
-        self.mlp = self._build_mlp(2,1024,512,1024)
+        self.tf = self._build_mlp(3,768,4096,256)
+        self.mlp = self._build_mlp(2,256,4096,256)
         
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
@@ -343,10 +343,10 @@ class MaskedAutoencoderViT(nn.Module):
         z1 = self.tf(latent_copy)
         p1 = self.mlp(z1)
         z2 = self.tf(aug_latent_copy)
-        p2 = self.mlp(z2)
+        # p2 = self.mlp(z2)
 
-        kl_loss =self.forward_kl_loss(z2,p1) + self.forward_kl_loss(z1,p2)
-        kl_loss = 1/2*kl_loss
+        kl_loss =self.forward_kl_loss(z2,p1)
+        # kl_loss = 1/2*kl_loss
         # loss = main_loss + aug_loss + kl_loss
         loss = main_loss + kl_loss
 

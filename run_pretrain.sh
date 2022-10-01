@@ -11,7 +11,7 @@ nohup python -m torch.distributed.launch --nnodes=4 --master_addr=10.116.150.13 
     --use_env main_pretrain.py \
     --batch_size 128 \
     --model mae_vit_base_patch16 \
-    --mask_ratio 0.75 \
+    --mask_ratio 0.5 \
     --epochs 100 \
     --accum_iter 1 \
     --output_dir ${all_dir} \
