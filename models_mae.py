@@ -52,6 +52,7 @@ class MaskedAutoencoderViT(nn.Module):
         self.decoder_embed = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
 
         self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
+        self.holder = nn.Parameter(torch.zeros(1, 1, embed_dim),requires_grad=False)
 
         self.decoder_pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, decoder_embed_dim), requires_grad=False)  # fixed sin-cos embedding
 
@@ -60,18 +61,14 @@ class MaskedAutoencoderViT(nn.Module):
             for i in range(decoder_depth)])
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
-        self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
+        self.decoder_pred = nn.Linear(decoder_embed_dim, embed_dim, bias=True) # decoder to patch
         # --------------------------------------------------------------------------
         self.norm_pix_loss = norm_pix_loss
         self.initialize_weights()
         self.momentum = momentum
-        self.prejector = self._build_mlp(3,768,4096,256)
-        self.prejector_m = self._build_mlp(3,768,4096,256)
-        self.prediction = self._build_mlp(2,256,4096,256)
         self.model_pairs = [[self.blocks,self.blocks_m],
                             [self.patch_embed,self.patch_embed_m],
-                            [self.norm,self.norm_m],
-                            [self.prejector,self.prejector_m]]
+                            [self.norm,self.norm_m]]
         self.copy_params()
 
     def _build_mlp(self, num_layers, input_dim, mlp_dim, output_dim, last_bn=True):
@@ -269,63 +266,47 @@ class MaskedAutoencoderViT(nn.Module):
 
         return x
 
-    def forward_loss(self, imgs, pred, mask):
+    def forward_loss(self, target, pred, mask):
         """
         imgs: [N, 3, H, W]
         pred: [N, L, p*p*3]
         mask: [N, L], 0 is keep, 1 is remove, 
         """
-        target = self.patchify(imgs)
-        if self.norm_pix_loss:
-            mean = target.mean(dim=-1, keepdim=True)
-            var = target.var(dim=-1, keepdim=True)
-            target = (target - mean) / (var + 1.e-6)**.5
 
+        target = target[:,1:,:]
         loss = (pred - target) ** 2
         loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
 
         loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
         return loss
 
-    def forward_cos_loss(self, x, y):
-        """
-        imgs: [N, 3, H, W]
-        pred: [N, L, p*p*3]
-        mask: [N, L], 0 is keep, 1 is remove, 
-        """
-        x = x.detach()
-        x = nn.functional.normalize(x, dim=1)
-        y = nn.functional.normalize(y, dim=1)
-
-        loss = 1 -  (x * y).sum(dim=-1)
-
-        loss = loss.mean()  # [N, L], mean loss per patch
-
-        return loss
+    def add_holder(self,x, ids_restore):
+        holder_tokens = self.holder.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
+        x_ = torch.cat([x[:, 1:, :], holder_tokens], dim=1)  # no cls token
+        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
+        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
+        return x
 
     def forward(self, imgs, mask_ratio=0.75):
         imgs_copy=imgs.clone()
         imgs=torch.cat([imgs,imgs_copy],dim=0)
         latent, mask,ids_shuffle, ids_restore = self.forward_encoder(imgs, mask_ratio)
-        latent_s = latent.clone()
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
-        mae_loss = self.forward_loss(imgs, pred, mask)
 
-        latent_s = latent_s[:,0,:]
-        latent_s = self.prejector(latent_s)
-        latent_s = self.prediction(latent_s)
         with torch.no_grad():
             self._momentum_update()
             latent_m = self.forward_encoder_m(imgs, ids_shuffle)
             N2 , L , D = latent_m.shape
             N = N2 //2
-            latent_m = latent_m[:,0,:]
-            latent_m = torch.cat([latent_m[N:,:],latent_m[:N,:]])
-            latent_m = self.prejector(latent_m)
+
+            latent_m = self.add_holder(latent_m , ids_restore)
+            p = latent_m.clone()
+            latent_m = torch.cat([latent_m[N:,:,:],latent_m[:N,:,:]])
+            latent_m = latent_m.detach()
+
+        loss = self.forward_loss(latent_m, pred, mask)
         
-        cos_loss = self.forward_cos_loss(latent_m, latent_s)
-        loss = mae_loss + cos_loss
-        return loss, mae_loss , cos_loss
+        return loss
 
 
 def mae_vit_base_patch16_dec512d8b(**kwargs):
