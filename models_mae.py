@@ -69,8 +69,8 @@ class MaskedAutoencoderViT(nn.Module):
 
         # self.main_tf = nn.Linear(embed_dim,256)
         # self.aug_tf = nn.Linear(embed_dim,256)
-        self.tf = self._build_mlp(3,768,2048,256)
-        self.mlp = self._build_mlp(2,256,2048,256)
+        self.tf = self._build_mlp(3,768,1024,256)
+        self.mlp = self._build_mlp(2,256,1024,256)
         
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
