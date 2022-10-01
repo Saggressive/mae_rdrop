@@ -55,5 +55,5 @@ class Imagenet_Dataset(Dataset):
         path = self.image_path[item]
         image = Image.open(path).convert("RGB")
         img=self.transform_train(image)
-        img0,img1=self.transform_base(img),self.transform_aug(img)
+        img0,img1=self.transform_base(img),self.transform_base(img)
         return img0,img1

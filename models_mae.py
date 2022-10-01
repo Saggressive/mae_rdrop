@@ -13,7 +13,7 @@ from functools import partial
 
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 from timm.models.vision_transformer import PatchEmbed, Block
 
 from util.pos_embed import get_2d_sincos_pos_embed
@@ -67,10 +67,6 @@ class MaskedAutoencoderViT(nn.Module):
         #     Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
         #     for i in range(decoder_depth)])            
 
-        # self.main_tf = nn.Linear(embed_dim,256)
-        # self.aug_tf = nn.Linear(embed_dim,256)
-        self.tf = self._build_mlp(3,768,1024,1024)
-        self.mlp = self._build_mlp(2,1024,512,1024)
         
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
@@ -264,31 +260,15 @@ class MaskedAutoencoderViT(nn.Module):
         loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
         return loss
 
-    def forward_kl_loss(self, x, y):
-        """
-        imgs: [N, 3, H, W]
-        pred: [N, L, p*p*3]
-        mask: [N, L], 0 is keep, 1 is remove, 
-        """
-        x = x.detach()
-        # x,y = x[:,1:,:],y[:,1:,:]
-        # x_mean = x.mean(dim=-1, keepdim=True)
-        # x_var = x.var(dim=-1, keepdim=True)
-        # x = (x - x_mean) / (x_var + 1.e-6)**.5
+    def compute_kl_loss(self, p, q, pad_mask=None):
+    
+        p_loss = F.kl_div(F.log_softmax(p, dim=-1), F.softmax(q, dim=-1), reduction='none')
+        q_loss = F.kl_div(F.log_softmax(q, dim=-1), F.softmax(p, dim=-1), reduction='none')
+        
+        p_loss = p_loss.sum()
+        q_loss = q_loss.sum()
 
-        # y_mean = y.mean(dim=-1, keepdim=True)
-        # y_var = y.var(dim=-1, keepdim=True)
-        # y = (y - y_mean) / (y_var + 1.e-6)**.5
-
-        # x = x.mean(dim=1)
-        # y = y.mean(dim=1)
-        x = nn.functional.normalize(x, dim=1)
-        y = nn.functional.normalize(y, dim=1)
-        # loss = (x - y) ** 2
-        loss = 2 -  2*(x * y).sum(dim=-1)
-
-        loss = loss.mean()  # [N, L], mean loss per patch
-
+        loss = (p_loss + q_loss) / 2
         return loss
 
     def _build_mlp(self, num_layers, input_dim, mlp_dim, output_dim, last_bn=True):
@@ -328,27 +308,13 @@ class MaskedAutoencoderViT(nn.Module):
         main_loss = self.forward_loss(imgs, pred, mask)
         # aug_loss = self.forward_loss(aug_imgs, aug_pred, aug_mask)
 
-        #cl
+        #kl
         latent_copy , aug_latent_copy = latent.clone() , aug_latent.clone()
-        # cls_latent , hidden = latent_copy[:,0,:] , latent_copy[:,1:,:]
-        # cls_aug_latent , aug_hidden = aug_latent_copy[:,0,:] , aug_latent_copy[:,1:,:]
-
-        # latent_copy = torch.cat([cls_aug_latent.unsqueeze(1),hidden] , dim=1)
-        # aug_latent_copy = torch.cat([cls_latent.unsqueeze(1),aug_hidden] , dim=1)
-        # latent_copy =self.main_tf(latent_copy)
-        # aug_latent_copy = self.aug_tf(aug_latent_copy)
-
-        latent_copy , aug_latent_copy = latent_copy[:,1:] , aug_latent_copy[:,1:]
         latent_copy , aug_latent_copy = latent_copy.mean(dim=1) , aug_latent_copy.mean(dim=1)
-        z1 = self.tf(latent_copy)
-        p1 = self.mlp(z1)
-        z2 = self.tf(aug_latent_copy)
-        p2 = self.mlp(z2)
-
-        kl_loss =self.forward_kl_loss(z2,p1) + self.forward_kl_loss(z1,p2)
-        kl_loss = 1/2*kl_loss
+        
+        kl_loss = self.compute_kl_loss(latent_copy, aug_latent_copy)
         # loss = main_loss + aug_loss + kl_loss
-        loss = main_loss + kl_loss
+        loss = main_loss + 0.5*kl_loss
 
         return loss, main_loss , torch.tensor(0,dtype=torch.float) , kl_loss
 
