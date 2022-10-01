@@ -6,6 +6,24 @@ from torchvision import transforms
 import random
 import os
 import numpy as np
+from PIL import ImageFilter , ImageOps ,Image
+class Solarize(object):
+    """Solarize augmentation from BYOL: https://arxiv.org/abs/2006.07733"""
+
+    def __call__(self, x):
+        return ImageOps.solarize(x)
+
+class GaussianBlur(object):
+    """Gaussian blur augmentation from SimCLR: https://arxiv.org/abs/2002.05709"""
+
+    def __init__(self, sigma=[.1, 2.]):
+        self.sigma = sigma
+
+    def __call__(self, x):
+        sigma = random.uniform(self.sigma[0], self.sigma[1])
+        x = x.filter(ImageFilter.GaussianBlur(radius=sigma))
+        return x
+
 class Imagenet_Dataset(Dataset):
     def __init__(self, path, input_size):
         self.image_path = []
@@ -26,7 +44,10 @@ class Imagenet_Dataset(Dataset):
 
         self.transform_aug = transforms.Compose([
             transforms.RandomApply([
-            transforms.ColorJitter(0.4, 0.4, 0.2, 0.1) ], p=0.9),
+            transforms.ColorJitter(0.4, 0.4, 0.2, 0.1)  ], p=0.8),
+            transforms.RandomGrayscale(p=0.2),
+            transforms.RandomApply([GaussianBlur([.1, 2.])], p=0.1),
+            transforms.RandomApply([Solarize()], p=0.2),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
