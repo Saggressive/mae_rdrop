@@ -7,7 +7,7 @@ node_rank=$1
 name=rdrop
 all_dir=/nlp_group/wuxing/suzhenpeng/mae_rdrop/output_dir/${name}
 mkdir ${all_dir}
-nohup python -m torch.distributed.launch --nnodes=4 --master_addr=10.116.150.13  --node_rank=${node_rank}  --nproc_per_node=8   --master_port 3243  \
+nohup python -m torch.distributed.launch --nnodes=4 --master_addr=10.116.146.14  --node_rank=${node_rank}  --nproc_per_node=8   --master_port 3243  \
     --use_env main_pretrain.py \
     --batch_size 128 \
     --model mae_vit_base_patch16 \
