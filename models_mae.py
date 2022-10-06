@@ -314,7 +314,7 @@ class MaskedAutoencoderViT(nn.Module):
         
         kl_loss = self.compute_kl_loss(latent_copy, aug_latent_copy)
         # loss = main_loss + aug_loss + kl_loss
-        loss = main_loss + 0.5*kl_loss
+        loss = main_loss 
 
         return loss, main_loss , torch.tensor(0,dtype=torch.float) , kl_loss
 
