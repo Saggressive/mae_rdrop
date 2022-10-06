@@ -45,7 +45,7 @@ def train_one_epoch(model: torch.nn.Module,
         samples = samples.to(device, non_blocking=True)
 
         with torch.cuda.amp.autocast():
-            if epoch>0 and epoch%2==0 and data_iter_step==0:
+            if epoch > 0 and epoch % 1==0 and data_iter_step == 0:
                 update = True
             else:
                 update = False
