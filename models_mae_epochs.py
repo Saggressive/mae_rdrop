@@ -25,7 +25,7 @@ class MaskedAutoencoderViT(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3,
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,momentum=0.9999):
+                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,momentum=0.9):
         super().__init__()
 
         # --------------------------------------------------------------------------
@@ -287,14 +287,16 @@ class MaskedAutoencoderViT(nn.Module):
         x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
         return x
 
-    def forward(self, imgs, step =0,mask_ratio=0.75):
+    def forward(self, imgs, update,mask_ratio=0.75):
         imgs_copy=imgs.clone()
         imgs=torch.cat([imgs,imgs_copy],dim=0)
         latent, mask,ids_shuffle, ids_restore = self.forward_encoder(imgs, mask_ratio)
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
 
         with torch.no_grad():
-            self._momentum_update()
+            if update :
+                self._momentum_update()
+
             latent_m = self.forward_encoder_m(imgs, ids_shuffle)
             N2 , L , D = latent_m.shape
             N = N2 //2

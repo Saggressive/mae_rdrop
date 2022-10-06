@@ -25,13 +25,14 @@ class MaskedAutoencoderViT(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3,
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,momentum=0.9999):
+                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,momentum=0.9996):
         super().__init__()
 
         # --------------------------------------------------------------------------
         # MAE encoder specifics
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         self.patch_embed_m = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
+        self.patch_embed_r = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -43,8 +44,12 @@ class MaskedAutoencoderViT(nn.Module):
         self.blocks_m = nn.ModuleList([
             Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
             for i in range(depth)])
+        self.blocks_r = nn.ModuleList([
+            Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
+            for i in range(depth)])
         self.norm = norm_layer(embed_dim)
         self.norm_m = norm_layer(embed_dim)
+        self.norm_r = norm_layer(embed_dim)
         # --------------------------------------------------------------------------
 
         # --------------------------------------------------------------------------
@@ -69,7 +74,15 @@ class MaskedAutoencoderViT(nn.Module):
         self.model_pairs = [[self.blocks,self.blocks_m],
                             [self.patch_embed,self.patch_embed_m],
                             [self.norm,self.norm_m]]
-        self.copy_params()
+        
+        self.model_pairs_r = [[self.blocks,self.blocks_r],
+                            [self.patch_embed,self.patch_embed_r],
+                            [self.norm,self.norm_r]]
+        self.model_pairs_r2m = [[self.blocks_r,self.blocks_m],
+                            [self.patch_embed_r,self.patch_embed_m],
+                            [self.norm_r,self.norm_m]]
+        self.copy_params(self.model_pairs)
+        self.copy_params(self.model_pairs_r)
 
     def _build_mlp(self, num_layers, input_dim, mlp_dim, output_dim, last_bn=True):
         mlp = []
@@ -90,15 +103,16 @@ class MaskedAutoencoderViT(nn.Module):
         return nn.Sequential(*mlp)
 
     @torch.no_grad()    
-    def copy_params(self):
-        for model_pair in self.model_pairs:           
+    def copy_params(self,model_pairs):
+        for model_pair in model_pairs:           
             for param, param_m in zip(model_pair[0].parameters(), model_pair[1].parameters()):
                 param_m.data.copy_(param.data)  # initialize
                 param_m.requires_grad = False  # not update by gradient    
 
+
     @torch.no_grad()        
     def _momentum_update(self):
-        for model_pair in self.model_pairs:           
+        for model_pair in self.model_pairs_r:           
             for param, param_m in zip(model_pair[0].parameters(), model_pair[1].parameters()):
                 param_m.data = param_m.data * self.momentum + param.data * (1. - self.momentum)
 
@@ -287,7 +301,7 @@ class MaskedAutoencoderViT(nn.Module):
         x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
         return x
 
-    def forward(self, imgs, step =0,mask_ratio=0.75):
+    def forward(self, imgs, step =0 ,mask_ratio=0.75):
         imgs_copy=imgs.clone()
         imgs=torch.cat([imgs,imgs_copy],dim=0)
         latent, mask,ids_shuffle, ids_restore = self.forward_encoder(imgs, mask_ratio)
@@ -295,6 +309,8 @@ class MaskedAutoencoderViT(nn.Module):
 
         with torch.no_grad():
             self._momentum_update()
+            if step % 600 == 0:
+                self.copy_params(self.model_pairs_r2m)
             latent_m = self.forward_encoder_m(imgs, ids_shuffle)
             N2 , L , D = latent_m.shape
             N = N2 //2

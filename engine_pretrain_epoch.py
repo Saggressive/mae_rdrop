@@ -45,7 +45,11 @@ def train_one_epoch(model: torch.nn.Module,
         samples = samples.to(device, non_blocking=True)
 
         with torch.cuda.amp.autocast():
-            loss  = model(samples,data_iter_step, mask_ratio=args.mask_ratio)
+            if epoch>0 and epoch%2==0 and data_iter_step==0:
+                update = True
+            else:
+                update = False
+            loss  = model(samples,update, mask_ratio=args.mask_ratio)
 
         loss_value = loss.item()
 
