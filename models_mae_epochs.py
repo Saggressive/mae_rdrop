@@ -25,7 +25,7 @@ class MaskedAutoencoderViT(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3,
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,momentum=0.9):
+                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False,momentum=0.975):
         super().__init__()
 
         # --------------------------------------------------------------------------
@@ -44,31 +44,20 @@ class MaskedAutoencoderViT(nn.Module):
             Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
-        self.norm_m = norm_layer(embed_dim)
-        # --------------------------------------------------------------------------
 
         # --------------------------------------------------------------------------
-        # MAE decoder specifics
-        self.decoder_embed = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
 
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
-        self.holder = nn.Parameter(torch.zeros(1, 1, embed_dim),requires_grad=False)
+        # --------------------------------------------------------------------------
 
-        self.decoder_pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, decoder_embed_dim), requires_grad=False)  # fixed sin-cos embedding
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
-        self.decoder_blocks = nn.ModuleList([
-            Block(decoder_embed_dim, decoder_num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
-            for i in range(decoder_depth)])
 
-        self.decoder_norm = norm_layer(decoder_embed_dim)
-        self.decoder_pred = nn.Linear(decoder_embed_dim, embed_dim, bias=True) # decoder to patch
         # --------------------------------------------------------------------------
         self.norm_pix_loss = norm_pix_loss
         self.initialize_weights()
         self.momentum = momentum
         self.model_pairs = [[self.blocks,self.blocks_m],
-                            [self.patch_embed,self.patch_embed_m],
-                            [self.norm,self.norm_m]]
+                            [self.patch_embed,self.patch_embed_m]]
         self.copy_params()
 
     def _build_mlp(self, num_layers, input_dim, mlp_dim, output_dim, last_bn=True):
@@ -107,9 +96,6 @@ class MaskedAutoencoderViT(nn.Module):
         # initialize (and freeze) pos_embed by sin-cos embedding
         pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.patch_embed.num_patches**.5), cls_token=True)
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1], int(self.patch_embed.num_patches**.5), cls_token=True)
-        self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
 
         # initialize patch_embed like nn.Linear (instead of nn.Conv2d)
         w = self.patch_embed.proj.weight.data
@@ -197,36 +183,36 @@ class MaskedAutoencoderViT(nn.Module):
         # embed patches
         x = self.patch_embed(x)
 
-        # add pos embed w/o cls token
-        x = x + self.pos_embed[:, 1:, :]
-
         # masking: length -> length * mask_ratio
         x, mask,ids_shuffle, ids_restore = self.random_masking(x, mask_ratio)
 
         # append cls token
-        cls_token = self.cls_token + self.pos_embed[:, :1, :]
-        cls_tokens = cls_token.expand(x.shape[0], -1, -1)
+        # cls_token = self.cls_token + self.pos_embed[:, :1, :]
+        cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
 
+        #add mask token 
+        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
+        x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
+        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
+        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
+
+        # add pos embed w/o cls token
+        x = x + self.pos_embed
+        
         # apply Transformer blocks
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
 
-        return x, mask, ids_shuffle,ids_restore
+        return x[:,1:,:], mask, ids_shuffle,ids_restore
 
-    def forward_encoder_m(self, x, ids_shuffle,mask_ratio=0.5):
+    def forward_encoder_m(self, x):
         # embed patches
         x = self.patch_embed_m(x)
 
         # add pos embed w/o cls token
         x = x + self.pos_embed[:, 1:, :]
-
-        # masking: length -> length * mask_ratio
-        N2,L,D = x.shape
-        len_keep = int(L*mask_ratio)
-        ids_keep = ids_shuffle[:, :len_keep]
-        x = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
 
         # append cls token
         cls_token = self.cls_token + self.pos_embed[:, :1, :]
@@ -236,35 +222,9 @@ class MaskedAutoencoderViT(nn.Module):
         # apply Transformer blocks
         for blk in self.blocks_m:
             x = blk(x)
-        x = self.norm_m(x)
 
-        return x
+        return x[:,1:,:]
 
-    def forward_decoder(self, x, ids_restore):
-        # embed tokens
-        x = self.decoder_embed(x)
-
-        # append mask tokens to sequence
-        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
-        x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
-        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
-        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
-
-        # add pos embed
-        x = x + self.decoder_pos_embed
-
-        # apply Transformer blocks
-        for blk in self.decoder_blocks:
-            x = blk(x)
-        x = self.decoder_norm(x)
-
-        # predictor projection
-        x = self.decoder_pred(x)
-
-        # remove cls token
-        x = x[:, 1:, :]
-
-        return x
 
     def forward_loss(self, target, pred, mask):
         """
@@ -273,40 +233,30 @@ class MaskedAutoencoderViT(nn.Module):
         mask: [N, L], 0 is keep, 1 is remove, 
         """
 
-        target = target[:,1:,:]
+        mean = target.mean(dim=-1, keepdim=True)
+        var = target.var(dim=-1, keepdim=True)
+        target = (target - mean) / (var + 1.e-6)**.5
+
         loss = (pred - target) ** 2
         loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
 
         loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
         return loss
 
-    def add_holder(self,x, ids_restore):
-        holder_tokens = self.holder.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
-        x_ = torch.cat([x[:, 1:, :], holder_tokens], dim=1)  # no cls token
-        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
-        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
-        return x
 
-    def forward(self, imgs, update,mask_ratio=0.75):
+    def forward(self, imgs, update=False,mask_ratio=0.75):
         imgs_copy=imgs.clone()
         imgs=torch.cat([imgs,imgs_copy],dim=0)
         latent, mask,ids_shuffle, ids_restore = self.forward_encoder(imgs, mask_ratio)
-        pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
-
         with torch.no_grad():
-            if update :
+            if update:
                 self._momentum_update()
-
-            latent_m = self.forward_encoder_m(imgs, ids_shuffle)
-            N2 , L , D = latent_m.shape
-            N = N2 //2
-
-            latent_m = self.add_holder(latent_m , ids_restore)
+            latent_m = self.forward_encoder_m(imgs_copy)
             p = latent_m.clone()
-            latent_m = torch.cat([latent_m[N:,:,:],latent_m[:N,:,:]])
+            latent_m = torch.cat([latent_m,p],dim=0)
             latent_m = latent_m.detach()
 
-        loss = self.forward_loss(latent_m, pred, mask)
+        loss = self.forward_loss(latent_m, latent, mask)
         
         return loss
 

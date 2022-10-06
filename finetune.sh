@@ -5,18 +5,18 @@ export NCCL_SOCKET_IFNAME=eth
 export NCCL_IB_HCA=mlx5
 
 node_rank=$1
-name=ft/pretrain400_step1m0.9999
+name=ft/pretrain400_epoch2m0.975_lr6e-5_warmup20
 all_dir=/nlp_group/wuxing/suzhenpeng/mae_rdrop/output_dir/${name}
 mkdir ${all_dir}
 
 
-nohup python -m torch.distributed.launch --nnodes=4 --master_addr=10.116.146.14 --node_rank=${node_rank}  --nproc_per_node=8   --master_port 23332  \
+nohup python -m torch.distributed.launch --nnodes=2 --master_addr=10.193.51.228 --node_rank=${node_rank}  --nproc_per_node=8   --master_port 23332  \
     --use_env main_finetune.py  \
-    --finetune output_dir/pretrain400_step1m0.9999/last.pth \
+    --finetune output_dir/pretrain400_epoch2m0.975_lr6e-5_warmup20/checkpoint-220.pth \
     --output_dir ${all_dir} \
     --log_dir ${all_dir} \
     --accum_iter 1 \
-    --batch_size 32 \
+    --batch_size 64 \
     --model vit_base_patch16 \
     --epochs 100 \
     --blr 5e-4 --layer_decay 0.65 \
